@@ -1,0 +1,116 @@
+# 包袋电商图片批处理
+
+## 使用
+
+1. 双击 `start.bat`。
+2. 选择本次要执行的独立模式。
+3. 选择该模式的输入图片文件夹。
+4. 等待当前模式批次完成。
+
+## 编辑 Prompt
+
+双击 `编辑Prompt.bat`，直接打开 `prompts` 文件夹。所有Prompt都是UTF-8文本文件，可以用记事本或其他文本编辑器修改：
+
+```text
+prompts\01_white.txt
+prompts\02_pattern.txt
+prompts\03_main.txt
+prompts\04_detail_01.txt
+prompts\04_detail_02.txt
+prompts\04_detail_03.txt
+prompts\04_detail_04.txt
+prompts\04_detail_05.txt
+```
+
+程序不会把Prompt写死在代码中，每次启动批处理时都会重新读取这些文件，因此保存修改后直接运行即可生效。
+
+支持产品图格式：PNG、JPG、JPEG、WEBP。程序只扫描所选文件夹的第一层。
+
+## 三个独立模式
+
+三个模式互不串行，每次只执行用户选择的一个步骤。每张输入图片是一个独立任务，最多同时运行5个任务。
+
+```text
+模式1：输入产品图 → intermediate\原图名_white.png
+模式2：输入待替换图片＋固定元素参考图 → final\原图名_pattern.png
+模式3：输入印花成品图 → 03_main.png＋5张详情图并发生成
+```
+
+模式2和模式3既可以读取所选文件夹第一层的普通图片，也可以直接选择此前的日期目录：
+
+```text
+模式2会自动查找：intermediate\原图名_white.png
+模式3会自动查找：final\原图名_pattern.png
+```
+
+印花替换阶段固定按以下顺序向接口发送图片，不需要用户上传参考图：
+
+```text
+图1：当前任务的白底包袋图
+图2：D:\ai\包包处理\assets\element-reference.png
+```
+
+API调用模式：
+
+```text
+模式1：Image API / gpt-image-2 / quality=high
+模式2：Responses API / gpt-5.6 / reasoning=max / image_generation edit high
+模式3：Responses API / gpt-5.6 / reasoning=high / image_generation edit high
+```
+
+生图认证配置按顺序复用：
+
+```text
+环境变量
+C:\Users\当前用户\.img-gen\config.json
+D:\ai\中转站\image-gen\config.example.json
+```
+
+API调用方式参考 `D:\ai\中转站\image-gen`，默认模型为 `gpt-image-2`，编辑端点为 `/v1/images/edits`。
+
+## 输出结构
+
+```text
+所选文件夹\output\YYYY-MM-DD\
+├─ intermediate\
+│  ├─ 商品A_white.png
+│  └─ 商品B_white.png
+├─ final\
+│  ├─ 商品A_pattern.png
+│  └─ 商品B_pattern.png
+├─ 商品A\
+│  └─ final\
+│     ├─ 03_main.png
+│     ├─ 04_detail_01.png
+│     ├─ 04_detail_02.png
+│     ├─ 04_detail_03.png
+│     ├─ 04_detail_04.png
+│     └─ 04_detail_05.png
+└─ 商品B\
+   └─ final\
+      └─ 同上6张图片
+```
+
+白底图和印花替换图按批次集中保存，不再为每张图片创建独立文件夹。只有一次生成6张图片的模式3按初始图片名称建立任务文件夹。
+
+日期按照台北时区在批次启动时确定。
+
+## 命令行
+
+```powershell
+node run.mjs --mode white --input "D:\产品图"
+node run.mjs --mode pattern --input "D:\产品图"
+node run.mjs --mode gallery --input "D:\产品图"
+```
+
+仅检查任务和目录，不调用接口：
+
+```powershell
+node run.mjs --mode pattern --input "D:\产品图" --dry-run
+```
+
+单独执行一次图片编辑：
+
+```powershell
+node edit.mjs --prompt-file prompts\01_white.txt --image input.png --out output.png
+```

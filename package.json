@@ -1,0 +1,10 @@
+{
+  "name": "bag-ecommerce-pipeline",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node run.mjs",
+    "check": "node --check run.mjs && node --check edit.mjs && node --check lib/image-api.mjs && node --check lib/reasoned-image-api.mjs"
+  }
+}
