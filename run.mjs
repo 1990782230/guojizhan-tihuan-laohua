@@ -317,7 +317,7 @@ function apiOptions(config) {
 
 function reasoningOptions(config, reasoningEffort) {
   return {
-    reasoningModel: config.reasoning_model || 'gpt-5.6',
+    reasoningModel: config.reasoning_model || 'gpt-5.4',
     reasoningEffort,
     size: config.size || '1024x1024',
     quality: config.quality || 'high',
@@ -375,7 +375,7 @@ async function processTask({
     const outputPath = path.join(finalDir, `${task.taskName}_pattern.png`);
     console.log(`${prefix} 替换印花`);
     await withRetry(`${task.taskName}/印花替换`, retries, () => reasonedEditImage({
-      ...reasoningOptions(config, config.pattern_reasoning_effort || 'max'),
+      ...reasoningOptions(config, config.pattern_reasoning_effort || 'xhigh'),
       prompt: prompts['02_pattern'],
       images: [task.imagePath, elementReference],
       outputPath,
@@ -486,10 +486,10 @@ async function main() {
   console.log(`输入目录：${inputDir}`);
   if (mode === 'pattern') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
-    console.log(`推理参数：${config.reasoning_model || 'gpt-5.6'} / ${config.pattern_reasoning_effort || 'max'}`);
+    console.log(`推理参数：${config.reasoning_model || 'gpt-5.4'} / ${config.pattern_reasoning_effort || 'xhigh'}`);
   }
   if (mode === 'gallery') {
-    console.log(`推理参数：${config.reasoning_model || 'gpt-5.6'} / ${config.gallery_reasoning_effort || 'high'}`);
+    console.log(`推理参数：${config.reasoning_model || 'gpt-5.4'} / ${config.gallery_reasoning_effort || 'high'}`);
   }
   console.log(`输出目录：${dateOutputRoot}`);
   console.log(`图片任务：${tasks.length}，任务并发：${concurrency}`);

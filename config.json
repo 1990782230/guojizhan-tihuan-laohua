@@ -1,7 +1,7 @@
 {
   "direct_image_model": "gpt-image-2",
-  "reasoning_model": "gpt-5.6",
-  "pattern_reasoning_effort": "max",
+  "reasoning_model": "gpt-5.4",
+  "pattern_reasoning_effort": "xhigh",
   "gallery_reasoning_effort": "high",
   "size": "1024x1024",
   "quality": "high",
