@@ -6,9 +6,8 @@ echo ========================================
 echo       Bag Image Batch Processor
 echo ========================================
 echo.
-echo Opening the mode selection window...
-echo If it is hidden, check the taskbar or press Alt+Tab.
+echo Opening the launcher...
 echo.
-node run.mjs
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -STA -File "%~dp0launcher.ps1"
 echo.
 pause
