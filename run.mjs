@@ -317,7 +317,7 @@ function apiOptions(config) {
 
 function reasoningOptions(config, reasoningEffort) {
   return {
-    reasoningModel: config.reasoning_model || 'gpt-5.5-pro',
+    reasoningModel: config.reasoning_model || 'gpt-5.5',
     reasoningEffort,
     size: config.size || '1024x1024',
     quality: config.quality || 'high',
@@ -486,10 +486,10 @@ async function main() {
   console.log(`输入目录：${inputDir}`);
   if (mode === 'pattern') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
-    console.log(`推理参数：${config.reasoning_model || 'gpt-5.5-pro'} / ${config.pattern_reasoning_effort || 'xhigh'}`);
+    console.log(`推理参数：${config.reasoning_model || 'gpt-5.5'} / ${config.pattern_reasoning_effort || 'xhigh'}`);
   }
   if (mode === 'gallery') {
-    console.log(`推理参数：${config.reasoning_model || 'gpt-5.5-pro'} / ${config.gallery_reasoning_effort || 'xhigh'}`);
+    console.log(`推理参数：${config.reasoning_model || 'gpt-5.5'} / ${config.gallery_reasoning_effort || 'xhigh'}`);
   }
   console.log(`输出目录：${dateOutputRoot}`);
   console.log(`图片任务：${tasks.length}，任务并发：${concurrency}`);
