@@ -75,6 +75,7 @@ function pickMode() {
     '$form.FormBorderStyle = "FixedDialog"',
     '$form.MaximizeBox = $false',
     '$form.MinimizeBox = $false',
+    '$form.TopMost = $true',
     '$label = New-Object System.Windows.Forms.Label',
     '$label.Text = "本次只执行一个独立步骤："',
     '$label.AutoSize = $true',
@@ -98,6 +99,7 @@ function pickMode() {
     '$b3.Location = New-Object System.Drawing.Point(28,151)',
     '$b3.Add_Click({ $script:choice = "gallery"; $form.Close() })',
     '$form.Controls.Add($b3)',
+    '$form.Add_Shown({ $form.Activate(); $form.BringToFront() })',
     '$null = $form.ShowDialog()',
     'Write-Output $script:choice',
   ].join('; ');
@@ -127,10 +129,20 @@ function pickFolder(mode) {
   const script = [
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
     'Add-Type -AssemblyName System.Windows.Forms',
+    'Add-Type -AssemblyName System.Drawing',
+    '$owner = New-Object System.Windows.Forms.Form',
+    '$owner.ShowInTaskbar = $false',
+    '$owner.TopMost = $true',
+    '$owner.StartPosition = "CenterScreen"',
+    '$owner.Size = New-Object System.Drawing.Size(1,1)',
+    '$owner.Opacity = 0',
+    '$owner.Show()',
+    '$owner.Activate()',
     '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
     `$dialog.Description = '${description}'`,
     '$dialog.ShowNewFolderButton = $false',
-    'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }',
+    'if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $dialog.SelectedPath }',
+    '$owner.Close()',
   ].join('; ');
   return runPowerShell(script);
 }
@@ -435,9 +447,11 @@ async function main() {
     return;
   }
 
+  if (!args.mode) console.log('正在打开处理模式选择窗口，请在弹出的窗口中选择……');
   const mode = normalizeMode(args.mode || pickMode());
   if (!mode) throw new Error('未选择处理模式，任务已取消');
 
+  if (!args.input) console.log('正在打开图片文件夹选择窗口，请选择要批量处理的文件夹……');
   const inputDir = args.input ? path.resolve(args.input) : pickFolder(mode);
   if (!inputDir) throw new Error('未选择图片文件夹，任务已取消');
   if (!await directoryExists(inputDir)) throw new Error(`图片文件夹不存在：${inputDir}`);
