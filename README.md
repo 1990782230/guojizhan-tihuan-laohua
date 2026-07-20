@@ -56,8 +56,8 @@ API调用模式：
 
 ```text
 模式1：Image API / gpt-image-2 / quality=high
-模式2：Responses API / gpt-5.4 / reasoning=xhigh / image_generation edit high
-模式3：Responses API / gpt-5.4 / reasoning=high / image_generation edit high
+模式2：Responses API / gpt-5.5 / reasoning=max / image_generation edit high
+模式3：Responses API / gpt-5.5 / reasoning=max / image_generation edit high
 ```
 
 生图认证配置按顺序复用：
