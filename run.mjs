@@ -421,7 +421,16 @@ async function processTask({
   return { task: task.taskName, status: 'success', taskRoot: completedOutput };
 }
 
-async function runPool(items, concurrency, worker) {
+async function copyFailedOriginal(dateOutputRoot, task) {
+  const failedDir = path.join(dateOutputRoot, 'failed');
+  await fs.mkdir(failedDir, { recursive: true });
+  const ext = path.extname(task.imagePath) || '.png';
+  const outputPath = path.join(failedDir, `${task.taskName}${ext}`);
+  await fs.copyFile(task.imagePath, outputPath);
+  return outputPath;
+}
+
+async function runPool(items, concurrency, worker, onFailure) {
   const results = new Array(items.length);
   let cursor = 0;
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
@@ -431,8 +440,17 @@ async function runPool(items, concurrency, worker) {
       try {
         results[index] = await worker(items[index], index);
       } catch (error) {
-        results[index] = { task: items[index].taskName, status: 'failed', error: error.message };
+        let failedOriginalPath = null;
+        if (onFailure) {
+          try {
+            failedOriginalPath = await onFailure(items[index], error, index);
+          } catch (copyError) {
+            console.error(`[${index + 1}/${items.length}] [${items[index].taskName}] 失败原图复制失败：${copyError.message}`);
+          }
+        }
+        results[index] = { task: items[index].taskName, status: 'failed', error: error.message, failedOriginalPath };
         console.error(`[${index + 1}/${items.length}] [${items[index].taskName}] 失败：${error.message}`);
+        if (failedOriginalPath) console.error(`  失败原图：${failedOriginalPath}`);
       }
     }
   });
@@ -495,17 +513,22 @@ async function main() {
   console.log(`图片任务：${tasks.length}，任务并发：${concurrency}`);
   if (args['dry-run']) console.log('当前为 dry-run，不调用生图接口。');
 
-  const results = await runPool(tasks, concurrency, (task, index) => processTask({
-    mode,
-    task,
-    index,
-    total: tasks.length,
-    dateOutputRoot,
-    elementReference,
-    prompts,
-    config,
-    dryRun: Boolean(args['dry-run']),
-  }));
+  const results = await runPool(
+    tasks,
+    concurrency,
+    (task, index) => processTask({
+      mode,
+      task,
+      index,
+      total: tasks.length,
+      dateOutputRoot,
+      elementReference,
+      prompts,
+      config,
+      dryRun: Boolean(args['dry-run']),
+    }),
+    args['dry-run'] ? null : task => copyFailedOriginal(dateOutputRoot, task),
+  );
 
   const succeeded = results.filter(result => result.status === 'success' || result.status === 'dry-run').length;
   const failed = results.filter(result => result.status === 'failed');
