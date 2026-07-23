@@ -366,31 +366,6 @@ function parseCheckResult(text) {
   };
 }
 
-async function findOriginalForCheck(resultImagePath, taskName) {
-  const finalDir = path.dirname(resultImagePath);
-  if (path.basename(finalDir).toLowerCase() !== 'final') return null;
-  const dateDir = path.dirname(finalDir);
-  if (path.basename(resultImagePath).toLowerCase() === '02_pattern.png') {
-    const legacyCandidate = path.join(dateDir, 'intermediate', '01_white.png');
-    if (await fileExists(legacyCandidate)) return legacyCandidate;
-  }
-  const candidate = path.join(dateDir, 'intermediate', `${taskName}_white.png`);
-  if (await fileExists(candidate)) return candidate;
-
-  // 兼容已有批次：白底前图已放入 intermediate，但文件名未追加 _white。
-  for (const extension of IMAGE_EXTENSIONS) {
-    const intermediateCandidate = path.join(dateDir, 'intermediate', `${taskName}${extension}`);
-    if (await fileExists(intermediateCandidate)) return intermediateCandidate;
-  }
-
-  // 兼容已有批次：原图与 final 文件夹同级，且保留原始文件名。
-  for (const extension of IMAGE_EXTENSIONS) {
-    const rootCandidate = path.join(dateDir, `${taskName}${extension}`);
-    if (await fileExists(rootCandidate)) return rootCandidate;
-  }
-  return null;
-}
-
 async function processTask({
   mode,
   task,
@@ -457,12 +432,8 @@ async function processTask({
     const outputPath = path.join(checkedDir, `${task.taskName}_checked.png`);
     const reportPath = path.join(reportDir, `${task.taskName}_check.json`);
     await fs.mkdir(reportDir, { recursive: true });
-    const originalPath = await findOriginalForCheck(task.imagePath, task.taskName);
-    if (!originalPath) {
-      throw new Error('复检需要同名白底前图。请选择包含 intermediate 和 final 的日期文件夹，或其 final 文件夹。');
-    }
-    const analysisImages = [originalPath, task.imagePath, elementReference];
-    console.log(`${prefix} 前后对比复检印花遗漏与错误新增`);
+    const analysisImages = [task.imagePath, elementReference];
+    console.log(`${prefix} 按元素参考图复检非目标纹样`);
     const analysis = await withRetry(`${task.taskName}/印花复检`, retries, () => reasonedAnalyzeImages({
       prompt: prompts['05_check'],
       images: analysisImages,
@@ -473,7 +444,6 @@ async function processTask({
     const check = parseCheckResult(analysis.text);
     const report = {
       input_image: task.imagePath,
-      original_image: originalPath,
       checked_at: new Date().toISOString(),
       model: analysis.responseModel,
       needs_repair: check.needsRepair,
@@ -491,7 +461,7 @@ async function processTask({
       await withRetry(`${task.taskName}/印花修复`, retries, () => reasonedEditImage({
         ...reasoningOptions(config, config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh'),
         prompt: check.repairPrompt,
-        images: [originalPath, task.imagePath, elementReference],
+        images: [task.imagePath, elementReference],
         outputPath,
       }));
     }
