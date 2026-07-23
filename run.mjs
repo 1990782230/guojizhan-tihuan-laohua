@@ -341,6 +341,13 @@ function reasoningOptions(config, reasoningEffort) {
   };
 }
 
+async function resolveFixedOldPatternReference(config) {
+  const configured = config.old_pattern_reference || 'assets/old-pattern-reference.png';
+  const resolved = path.resolve(PROJECT_ROOT, configured);
+  if (!await fileExists(resolved)) throw new Error(`缺少内置旧纹样参考图：${resolved}`);
+  return resolved;
+}
+
 function parseCheckResult(text) {
   const cleaned = String(text || '')
     .trim()
@@ -376,6 +383,7 @@ async function processTask({
   total,
   dateOutputRoot,
   elementReference,
+  oldPatternReference,
   prompts,
   config,
   dryRun,
@@ -437,8 +445,8 @@ async function processTask({
     await fs.mkdir(reportDir, { recursive: true });
     const originalPath = await findOriginalForCheck(task.imagePath, task.taskName);
     const analysisImages = originalPath
-      ? [originalPath, task.imagePath, elementReference]
-      : [task.imagePath, elementReference];
+      ? [originalPath, task.imagePath, elementReference, oldPatternReference]
+      : [task.imagePath, elementReference, oldPatternReference];
     console.log(`${prefix} 复检印花遗漏${originalPath ? '（含替换前原图对比）' : ''}`);
     const analysis = await withRetry(`${task.taskName}/印花复检`, retries, () => reasonedAnalyzeImages({
       prompt: prompts['05_check'],
@@ -593,11 +601,15 @@ async function main() {
   const elementReference = (mode === 'pattern' || mode === 'check')
     ? await resolveFixedElementReference(config)
     : null;
+  const oldPatternReference = mode === 'check'
+    ? await resolveFixedOldPatternReference(config)
+    : null;
 
   console.log(`处理模式：${MODES[mode]}`);
   console.log(`输入目录：${inputDir}`);
   if (mode === 'pattern' || mode === 'check') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
+    if (mode === 'check') console.log(`固定旧纹样参考图：${oldPatternReference}`);
     const effort = mode === 'check'
       ? (config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh')
       : (config.pattern_reasoning_effort || 'xhigh');
@@ -620,6 +632,7 @@ async function main() {
       total: tasks.length,
       dateOutputRoot,
       elementReference,
+      oldPatternReference,
       prompts,
       config,
       dryRun: Boolean(args['dry-run']),
