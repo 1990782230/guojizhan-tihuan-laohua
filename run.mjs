@@ -13,6 +13,7 @@ const MODES = {
   pattern: '印花替换',
   gallery: '电商主图与详情图',
   check: '印花复检修复',
+  lvcheck: 'LV信息检测分类',
 };
 
 function parseArgs(argv) {
@@ -41,9 +42,10 @@ const HELP = `包袋电商图片批处理程序
   node run.mjs --mode pattern --input "D:\\产品图"
   node run.mjs --mode gallery --input "D:\\产品图"
   node run.mjs --mode check --input "D:\\产品图"
+  node run.mjs --mode lvcheck --input "D:\\产品图"
 
 可选参数：
-  --mode <mode>          white | pattern | gallery | check
+  --mode <mode>          white | pattern | gallery | check | lvcheck
   --input <folder>       直接指定输入文件夹
   --output <folder>      自定义输出根目录
   --dry-run              仅检查任务和目录，不调用生图接口
@@ -73,7 +75,7 @@ function pickMode() {
     '$form = New-Object System.Windows.Forms.Form',
     '$form.Text = "选择处理模式"',
     '$form.StartPosition = "CenterScreen"',
-    '$form.Size = New-Object System.Drawing.Size(430,300)',
+    '$form.Size = New-Object System.Drawing.Size(430,350)',
     '$form.FormBorderStyle = "FixedDialog"',
     '$form.MaximizeBox = $false',
     '$form.MinimizeBox = $false',
@@ -107,6 +109,12 @@ function pickMode() {
     '$b4.Location = New-Object System.Drawing.Point(28,199)',
     '$b4.Add_Click({ $script:choice = "check"; $form.Close() })',
     '$form.Controls.Add($b4)',
+    '$b5 = New-Object System.Windows.Forms.Button',
+    '$b5.Text = "5. 检测并移出LV相关图片"',
+    '$b5.Size = New-Object System.Drawing.Size(350,38)',
+    '$b5.Location = New-Object System.Drawing.Point(28,247)',
+    '$b5.Add_Click({ $script:choice = "lvcheck"; $form.Close() })',
+    '$form.Controls.Add($b5)',
     '$form.Add_Shown({ $form.Activate(); $form.BringToFront() })',
     '$null = $form.ShowDialog()',
     'Write-Output $script:choice',
@@ -125,6 +133,8 @@ function normalizeMode(value) {
     gallery: 'gallery',
     '4': 'check',
     check: 'check',
+    '5': 'lvcheck',
+    lvcheck: 'lvcheck',
   };
   return aliases[normalized] || '';
 }
@@ -135,6 +145,7 @@ function pickFolder(mode) {
     pattern: '选择待替换印花的图片文件夹，或选择上一阶段的日期目录',
     gallery: '选择已完成印花替换的图片文件夹，或选择上一阶段的日期目录',
     check: '选择已完成印花替换的图片文件夹，或选择上一阶段的日期目录',
+    lvcheck: '选择需要检测并分类LV相关内容的图片文件夹',
   };
   const description = descriptions[mode].replaceAll("'", "''");
   const script = [
@@ -197,6 +208,7 @@ async function readPrompts(mode) {
     white: ['01_white'],
     pattern: ['02_pattern'],
     check: ['05_check', '02_pattern'],
+    lvcheck: ['06_lv_detect'],
     gallery: [
       '03_main',
       '04_detail_01',
@@ -254,6 +266,7 @@ async function findCanonicalInputs(inputDir, mode) {
 
 async function listModeImages(inputDir, mode) {
   const topLevel = await listTopLevelImages(inputDir);
+  if (mode === 'lvcheck') return topLevel;
   if (mode === 'check') {
     // 日期目录的第一层可能同时保留原图；复检必须优先使用 final 中的印花成品图。
     const canonical = await findCanonicalInputs(inputDir, mode);
@@ -366,6 +379,53 @@ function parseCheckResult(text) {
   };
 }
 
+function parseLvDetectionResult(text) {
+  const cleaned = String(text || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  let result;
+  try {
+    result = JSON.parse(cleaned);
+  } catch {
+    throw new Error(`LV检测结果不是有效JSON：${cleaned.slice(0, 300)}`);
+  }
+  const decision = String(result.decision || '').trim().toLowerCase();
+  if (!['detected', 'not_detected', 'uncertain'].includes(decision)) {
+    throw new Error(`LV检测结果包含无效decision：${decision || 'empty'}`);
+  }
+  const confidence = Number(result.confidence);
+  return {
+    decision,
+    confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : null,
+    evidence: Array.isArray(result.evidence) ? result.evidence.map(String) : [],
+    summary: String(result.summary || '').trim(),
+  };
+}
+
+async function uniqueDestinationPath(dirPath, fileName) {
+  const extension = path.extname(fileName);
+  const stem = path.basename(fileName, extension);
+  let candidate = path.join(dirPath, fileName);
+  let suffix = 2;
+  while (await fileExists(candidate)) {
+    candidate = path.join(dirPath, `${stem}_${suffix}${extension}`);
+    suffix++;
+  }
+  return candidate;
+}
+
+async function moveFile(sourcePath, destinationPath) {
+  try {
+    await fs.rename(sourcePath, destinationPath);
+  } catch (error) {
+    if (error?.code !== 'EXDEV') throw error;
+    await fs.copyFile(sourcePath, destinationPath);
+    await fs.unlink(sourcePath);
+  }
+}
+
 function buildCheckRepairPrompt(basePatternPrompt, findings) {
   const objects = findings.length
     ? findings.map((finding, index) => `${index + 1}. ${finding}`).join('\n')
@@ -421,6 +481,8 @@ async function processTask({
       ? path.join(finalDir, `${task.taskName}_pattern.png`)
       : mode === 'check'
         ? path.join(dateOutputRoot, 'checked', `${task.taskName}_checked.png`)
+      : mode === 'lvcheck'
+        ? path.join(dateOutputRoot, 'lv_detected', path.basename(task.imagePath))
       : taskRoot;
     console.log(`${prefix} ${MODES[mode]}计划完成：${plannedOutput}`);
     return { task: task.taskName, status: 'dry-run', taskRoot: plannedOutput };
@@ -492,6 +554,58 @@ async function processTask({
         outputPath,
       }));
     }
+  }
+
+  if (mode === 'lvcheck') {
+    const detectedDir = path.join(dateOutputRoot, 'lv_detected');
+    const reportDir = path.join(dateOutputRoot, 'lv_detection_reports');
+    console.log(`${prefix} 检测LV相关信息`);
+    const analyzed = await withRetry(`${task.taskName}/LV检测`, retries, async () => {
+      const analysis = await reasonedAnalyzeImages({
+        prompt: prompts['06_lv_detect'],
+        images: [task.imagePath],
+        reasoningModel: config.reasoning_model || 'gpt-5.6-terra',
+        reasoningEffort: config.lv_detection_reasoning_effort || 'xhigh',
+        timeoutMs: Number(config.request_timeout_ms) || 900000,
+      });
+      return { analysis, detection: parseLvDetectionResult(analysis.text) };
+    });
+
+    let movedTo = null;
+    if (analyzed.detection.decision === 'detected') {
+      await fs.mkdir(detectedDir, { recursive: true });
+      movedTo = await uniqueDestinationPath(detectedDir, path.basename(task.imagePath));
+      await moveFile(task.imagePath, movedTo);
+      console.log(`${prefix} 检测命中，已移动：${movedTo}`);
+    } else if (analyzed.detection.decision === 'uncertain') {
+      console.log(`${prefix} 检测结果不确定，原图保留`);
+    } else {
+      console.log(`${prefix} 未检测到，原图保留`);
+    }
+
+    try {
+      await fs.mkdir(reportDir, { recursive: true });
+      await fs.writeFile(
+        path.join(reportDir, `${task.taskName}_lv.json`),
+        `${JSON.stringify({
+          input_image: task.imagePath,
+          checked_at: new Date().toISOString(),
+          model: analyzed.analysis.responseModel,
+          ...analyzed.detection,
+          moved_to: movedTo,
+        }, null, 2)}\n`,
+        'utf8',
+      );
+    } catch (reportError) {
+      console.error(`${prefix} 检测报告保存失败：${reportError.message}`);
+    }
+
+    return {
+      task: task.taskName,
+      status: 'success',
+      taskRoot: movedTo || task.imagePath,
+      decision: analyzed.detection.decision,
+    };
   }
 
   if (mode === 'gallery') {
@@ -625,6 +739,10 @@ async function main() {
   }
   if (mode === 'gallery') {
     console.log(`推理参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${config.gallery_reasoning_effort || 'xhigh'}`);
+  }
+  if (mode === 'lvcheck') {
+    console.log(`检测参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${config.lv_detection_reasoning_effort || 'xhigh'}`);
+    console.log('仅移动 decision=detected 的图片；not_detected 和 uncertain 保留原位。');
   }
   console.log(`输出目录：${dateOutputRoot}`);
   console.log(`图片任务：${tasks.length}，任务并发：${concurrency}`);
