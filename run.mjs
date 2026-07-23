@@ -254,6 +254,11 @@ async function findCanonicalInputs(inputDir, mode) {
 
 async function listModeImages(inputDir, mode) {
   const topLevel = await listTopLevelImages(inputDir);
+  if (mode === 'check') {
+    // 日期目录的第一层可能同时保留原图；复检必须优先使用 final 中的印花成品图。
+    const canonical = await findCanonicalInputs(inputDir, mode);
+    return canonical.length ? canonical : topLevel;
+  }
   if (topLevel.length || mode === 'white') return topLevel;
   return findCanonicalInputs(inputDir, mode);
 }
@@ -370,7 +375,14 @@ async function findOriginalForCheck(resultImagePath, taskName) {
     if (await fileExists(legacyCandidate)) return legacyCandidate;
   }
   const candidate = path.join(dateDir, 'intermediate', `${taskName}_white.png`);
-  return await fileExists(candidate) ? candidate : null;
+  if (await fileExists(candidate)) return candidate;
+
+  // 兼容已有批次：原图与 final 文件夹同级，且保留原始文件名。
+  for (const extension of IMAGE_EXTENSIONS) {
+    const rootCandidate = path.join(dateDir, `${taskName}${extension}`);
+    if (await fileExists(rootCandidate)) return rootCandidate;
+  }
+  return null;
 }
 
 async function processTask({
