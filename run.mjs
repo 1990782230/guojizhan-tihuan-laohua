@@ -196,7 +196,7 @@ async function readPrompts(mode) {
   const namesByMode = {
     white: ['01_white'],
     pattern: ['02_pattern'],
-    check: ['05_check'],
+    check: ['05_check', '02_pattern'],
     gallery: [
       '03_main',
       '04_detail_01',
@@ -337,7 +337,7 @@ function apiOptions(config) {
 
 function reasoningOptions(config, reasoningEffort) {
   return {
-    reasoningModel: config.reasoning_model || 'gpt-5.5',
+    reasoningModel: config.reasoning_model || 'gpt-5.6-terra',
     reasoningEffort,
     size: config.size || '1024x1024',
     quality: config.quality || 'high',
@@ -364,6 +364,30 @@ function parseCheckResult(text) {
     findings: Array.isArray(result.findings) ? result.findings.map(String) : [],
     repairPrompt: String(result.repair_prompt || '').trim(),
   };
+}
+
+function buildCheckRepairPrompt(basePatternPrompt, findings) {
+  const objects = findings.length
+    ? findings.map((finding, index) => `${index + 1}. ${finding}`).join('\n')
+    : '1. 复检模型确认存在不属于元素参考图的残留旧纹样。';
+  return `${basePatternPrompt}\n\n【复检修复模式——本节优先级最高】
+
+这是对已经完成一次印花替换的成品图进行补修，不是重新设计或重新生成整张产品图。
+
+图1是待编辑的印花成品图，图2是元素参考图。请使用与首次印花替换相同的识别、材质融合、透视和遮挡能力，自主检查图1中的纹样对象，只补修复检模型确认仍存在的以下对象类型：
+
+${objects}
+
+执行规则：
+
+1. 以“纹样对象”为编辑单位，不以坐标、矩形范围或整片区域为编辑单位。
+2. 在图1中自主识别属于上述类型、且外形确实不属于图2五个目标元素的所有残留旧纹样对象，并按照前述映射逐个原位替换。
+3. 图1中已经属于图2的正确元素全部锁定保留，包括它们当前的位置、数量、大小和排列布局；即使这些正确元素处于新的布局中也不得删除或重排。
+4. 不编辑正确元素周围的皮革区域，不清除整片印花，不重绘整个包身，不改变产品其他区域。
+5. 除被确认的残留旧纹样对象和指定旧文字外，图1的包型、颜色、材质纹理、缝线、包边、五金结构、手柄、肩带、挂饰、背景、光影和构图必须保持不变。
+6. 必须由你在编辑前完成对象级视觉复核；不要机械照搬复检描述中可能不准确的位置，不要把正确的图2元素再次替换。
+7. 修复后的旧纹样对象必须完整变为图2对应元素，同时保持原对象的中心、尺寸、旋转、透视、裁切、材质和遮挡关系。
+`;
 }
 
 async function processTask({
@@ -442,13 +466,17 @@ async function processTask({
       timeoutMs: Number(config.request_timeout_ms) || 900000,
     }));
     const check = parseCheckResult(analysis.text);
+    const repairPrompt = check.needsRepair
+      ? buildCheckRepairPrompt(prompts['02_pattern'], check.findings)
+      : '';
     const report = {
       input_image: task.imagePath,
       checked_at: new Date().toISOString(),
       model: analysis.responseModel,
       needs_repair: check.needsRepair,
       findings: check.findings,
-      repair_prompt: check.repairPrompt,
+      detector_prompt: check.repairPrompt,
+      repair_prompt: repairPrompt,
     };
     await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 
@@ -456,11 +484,10 @@ async function processTask({
       await fs.copyFile(task.imagePath, outputPath);
       console.log(`${prefix} 未发现明确遗漏，直接保留原结果`);
     } else {
-      if (!check.repairPrompt) throw new Error('复检发现遗漏，但没有返回修复 Prompt');
-      console.log(`${prefix} 发现 ${check.findings.length} 处遗漏，定向修复中`);
+      console.log(`${prefix} 发现 ${check.findings.length} 类残留对象，按首次纹样替换流程补修`);
       await withRetry(`${task.taskName}/印花修复`, retries, () => reasonedEditImage({
         ...reasoningOptions(config, config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh'),
-        prompt: check.repairPrompt,
+        prompt: repairPrompt,
         images: [task.imagePath, elementReference],
         outputPath,
       }));
