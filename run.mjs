@@ -14,6 +14,7 @@ const MODES = {
   gallery: '电商主图与详情图',
   check: '印花复检修复',
   lvcheck: 'LV信息检测分类',
+  auto: '自动完整处理',
 };
 
 function parseArgs(argv) {
@@ -43,9 +44,10 @@ const HELP = `包袋电商图片批处理程序
   node run.mjs --mode gallery --input "D:\\产品图"
   node run.mjs --mode check --input "D:\\产品图"
   node run.mjs --mode lvcheck --input "D:\\产品图"
+  node run.mjs --mode auto --input "D:\\产品图"
 
 可选参数：
-  --mode <mode>          white | pattern | gallery | check | lvcheck
+  --mode <mode>          white | pattern | gallery | check | lvcheck | auto
   --input <folder>       直接指定输入文件夹
   --output <folder>      自定义输出根目录
   --dry-run              仅检查任务和目录，不调用生图接口
@@ -75,7 +77,7 @@ function pickMode() {
     '$form = New-Object System.Windows.Forms.Form',
     '$form.Text = "选择处理模式"',
     '$form.StartPosition = "CenterScreen"',
-    '$form.Size = New-Object System.Drawing.Size(430,350)',
+    '$form.Size = New-Object System.Drawing.Size(430,400)',
     '$form.FormBorderStyle = "FixedDialog"',
     '$form.MaximizeBox = $false',
     '$form.MinimizeBox = $false',
@@ -115,6 +117,12 @@ function pickMode() {
     '$b5.Location = New-Object System.Drawing.Point(28,247)',
     '$b5.Add_Click({ $script:choice = "lvcheck"; $form.Close() })',
     '$form.Controls.Add($b5)',
+    '$b6 = New-Object System.Windows.Forms.Button',
+    '$b6.Text = "6. 自动完成替换、修复和检测"',
+    '$b6.Size = New-Object System.Drawing.Size(350,38)',
+    '$b6.Location = New-Object System.Drawing.Point(28,295)',
+    '$b6.Add_Click({ $script:choice = "auto"; $form.Close() })',
+    '$form.Controls.Add($b6)',
     '$form.Add_Shown({ $form.Activate(); $form.BringToFront() })',
     '$null = $form.ShowDialog()',
     'Write-Output $script:choice',
@@ -135,6 +143,8 @@ function normalizeMode(value) {
     check: 'check',
     '5': 'lvcheck',
     lvcheck: 'lvcheck',
+    '6': 'auto',
+    auto: 'auto',
   };
   return aliases[normalized] || '';
 }
@@ -146,6 +156,7 @@ function pickFolder(mode) {
     gallery: '选择已完成印花替换的图片文件夹，或选择上一阶段的日期目录',
     check: '选择已完成印花替换的图片文件夹，或选择上一阶段的日期目录',
     lvcheck: '选择需要检测并分类LV相关内容的图片文件夹',
+    auto: '选择需要自动完成纹样替换、检测修复和LV检测的原始图片文件夹',
   };
   const description = descriptions[mode].replaceAll("'", "''");
   const script = [
@@ -209,6 +220,7 @@ async function readPrompts(mode) {
     pattern: ['02_pattern'],
     check: ['05_check', '02_pattern'],
     lvcheck: ['06_lv_detect'],
+    auto: ['02_pattern', '05_check', '06_lv_detect'],
     gallery: [
       '03_main',
       '04_detail_01',
@@ -266,7 +278,7 @@ async function findCanonicalInputs(inputDir, mode) {
 
 async function listModeImages(inputDir, mode) {
   const topLevel = await listTopLevelImages(inputDir);
-  if (mode === 'lvcheck') return topLevel;
+  if (mode === 'lvcheck' || mode === 'auto') return topLevel;
   if (mode === 'check') {
     // 日期目录的第一层可能同时保留原图；复检必须优先使用 final 中的印花成品图。
     const canonical = await findCanonicalInputs(inputDir, mode);
@@ -433,6 +445,20 @@ async function moveFile(sourcePath, destinationPath) {
   }
 }
 
+async function writeJsonReport(filePath, value) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
+async function runAutoStage(stage, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    error.autoStage = stage;
+    throw error;
+  }
+}
+
 function buildCheckRepairPrompt(basePatternPrompt, findings) {
   const objects = findings.length
     ? findings.map((finding, index) => `${index + 1}. ${finding}`).join('\n')
@@ -455,6 +481,115 @@ ${objects}
 6. 必须由你在编辑前完成对象级视觉复核；不要机械照搬复检描述中可能不准确的位置，不要把正确的图2元素再次替换。
 7. 修复后的旧纹样对象必须完整变为图2对应元素，同时保持原对象的中心、尺寸、旋转、透视、裁切、材质和遮挡关系。
 `;
+}
+
+async function processAutoTask({
+  task,
+  prefix,
+  dateOutputRoot,
+  elementReference,
+  backgroundReference,
+  prompts,
+  config,
+  retries,
+}) {
+  const autoRoot = path.join(dateOutputRoot, 'auto');
+  const patternPath = path.join(autoRoot, 'intermediate', '01_pattern', `${task.taskName}_pattern.png`);
+  const repairedPath = path.join(autoRoot, 'intermediate', '02_repaired', `${task.taskName}_repaired.png`);
+  const checkReportPath = path.join(autoRoot, 'reports', 'check', `${task.taskName}_check.json`);
+  const lvReportPath = path.join(autoRoot, 'reports', 'lv', `${task.taskName}_lv.json`);
+
+  console.log(`${prefix} 自动步骤1/3：纹样替换与背景融合`);
+  await runAutoStage('01_pattern', () => withRetry(`${task.taskName}/自动纹样替换`, retries, () => reasonedEditImage({
+    ...reasoningOptions(config, config.pattern_reasoning_effort || 'xhigh'),
+    prompt: prompts['02_pattern'],
+    images: [task.imagePath, elementReference, backgroundReference],
+    outputPath: patternPath,
+  })));
+
+  console.log(`${prefix} 自动步骤2/3：检测并补修残留纹样`);
+  const checked = await runAutoStage('02_repair', () => withRetry(`${task.taskName}/自动复检`, retries, async () => {
+    const analysis = await reasonedAnalyzeImages({
+      prompt: prompts['05_check'],
+      images: [patternPath, elementReference],
+      reasoningModel: config.reasoning_model || 'gpt-5.6-terra',
+      reasoningEffort: config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh',
+      timeoutMs: Number(config.request_timeout_ms) || 900000,
+    });
+    return { analysis, check: parseCheckResult(analysis.text) };
+  }));
+  const repairPrompt = checked.check.needsRepair
+    ? buildCheckRepairPrompt(prompts['02_pattern'], checked.check.findings)
+    : '';
+  await runAutoStage('02_repair', () => writeJsonReport(checkReportPath, {
+    input_image: patternPath,
+    checked_at: new Date().toISOString(),
+    model: checked.analysis.responseModel,
+    needs_repair: checked.check.needsRepair,
+    findings: checked.check.findings,
+    detector_prompt: checked.check.repairPrompt,
+    repair_prompt: repairPrompt,
+  }));
+
+  if (checked.check.needsRepair) {
+    console.log(`${prefix} 复检发现 ${checked.check.findings.length} 类残留对象，执行补修`);
+    await runAutoStage('02_repair', () => withRetry(`${task.taskName}/自动补修`, retries, () => reasonedEditImage({
+      ...reasoningOptions(config, config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh'),
+      prompt: repairPrompt,
+      images: [patternPath, elementReference, backgroundReference],
+      outputPath: repairedPath,
+    })));
+  } else {
+    await fs.mkdir(path.dirname(repairedPath), { recursive: true });
+    await runAutoStage('02_repair', () => fs.copyFile(patternPath, repairedPath));
+    console.log(`${prefix} 未发现明确残留，保留纹样替换结果`);
+  }
+
+  console.log(`${prefix} 自动步骤3/3：纯LV信息检测分类`);
+  const lvChecked = await runAutoStage('03_lv_detection', () => withRetry(`${task.taskName}/自动LV检测`, retries, async () => {
+    const analysis = await reasonedAnalyzeImages({
+      prompt: prompts['06_lv_detect'],
+      images: [repairedPath],
+      reasoningModel: config.reasoning_model || 'gpt-5.6-terra',
+      reasoningEffort: config.lv_detection_reasoning_effort || 'xhigh',
+      timeoutMs: Number(config.request_timeout_ms) || 900000,
+    });
+    return { analysis, detection: parseLvDetectionResult(analysis.text) };
+  }));
+
+  const category = lvChecked.detection.decision === 'detected'
+    ? 'lv_detected'
+    : lvChecked.detection.decision === 'uncertain'
+      ? 'uncertain'
+      : 'passed';
+  const finalName = `${task.taskName}_final.png`;
+  const finalPath = path.join(autoRoot, 'final', category, finalName);
+  for (const otherCategory of ['passed', 'lv_detected', 'uncertain']) {
+    const existingPath = path.join(autoRoot, 'final', otherCategory, finalName);
+    try {
+      await fs.unlink(existingPath);
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error;
+    }
+  }
+  await fs.mkdir(path.dirname(finalPath), { recursive: true });
+  await runAutoStage('03_lv_detection', () => fs.copyFile(repairedPath, finalPath));
+  await runAutoStage('03_lv_detection', () => writeJsonReport(lvReportPath, {
+    input_image: repairedPath,
+    checked_at: new Date().toISOString(),
+    model: lvChecked.analysis.responseModel,
+    ...lvChecked.detection,
+    final_category: category,
+    final_image: finalPath,
+  }));
+
+  console.log(`${prefix} 自动流程完成，分类：${category}，最终图片：${finalPath}`);
+  return {
+    task: task.taskName,
+    status: 'success',
+    taskRoot: finalPath,
+    decision: lvChecked.detection.decision,
+  };
 }
 
 async function processTask({
@@ -491,12 +626,27 @@ async function processTask({
         ? path.join(dateOutputRoot, 'checked', `${task.taskName}_checked.png`)
       : mode === 'lvcheck'
         ? path.join(dateOutputRoot, 'lv_detected', path.basename(task.imagePath))
+      : mode === 'auto'
+        ? path.join(dateOutputRoot, 'auto')
       : taskRoot;
     console.log(`${prefix} ${MODES[mode]}计划完成：${plannedOutput}`);
     return { task: task.taskName, status: 'dry-run', taskRoot: plannedOutput };
   }
 
   const retries = Math.max(0, Number(config.retry_count) || 0);
+
+  if (mode === 'auto') {
+    return processAutoTask({
+      task,
+      prefix,
+      dateOutputRoot,
+      elementReference,
+      backgroundReference,
+      prompts,
+      config,
+      retries,
+    });
+  }
 
   if (mode === 'white') {
     const outputPath = path.join(intermediateDir, `${task.taskName}_white.png`);
@@ -666,6 +816,18 @@ async function copyFailedOriginal(dateOutputRoot, task) {
   return outputPath;
 }
 
+async function copyAutoFailedOriginal(dateOutputRoot, task, error) {
+  const stage = ['01_pattern', '02_repair', '03_lv_detection'].includes(error?.autoStage)
+    ? error.autoStage
+    : 'unknown';
+  const failedDir = path.join(dateOutputRoot, 'auto', 'failed', stage);
+  await fs.mkdir(failedDir, { recursive: true });
+  const ext = path.extname(task.imagePath) || '.png';
+  const outputPath = await uniqueDestinationPath(failedDir, `${task.taskName}${ext}`);
+  await fs.copyFile(task.imagePath, outputPath);
+  return outputPath;
+}
+
 async function runPool(items, concurrency, worker, onFailure) {
   const results = new Array(items.length);
   let cursor = 0;
@@ -732,19 +894,19 @@ async function main() {
   const tasks = assignTaskNames(images);
   const prompts = await readPrompts(mode);
   const concurrency = Math.max(1, Number(config.task_concurrency) || 5);
-  const elementReference = (mode === 'pattern' || mode === 'check')
+  const elementReference = (mode === 'pattern' || mode === 'check' || mode === 'auto')
     ? await resolveFixedElementReference(config)
     : null;
-  const backgroundReference = (mode === 'pattern' || mode === 'check')
+  const backgroundReference = (mode === 'pattern' || mode === 'check' || mode === 'auto')
     ? await resolveFixedBackgroundReference(config)
     : null;
 
   console.log(`处理模式：${MODES[mode]}`);
   console.log(`输入目录：${inputDir}`);
-  if (mode === 'pattern' || mode === 'check') {
+  if (mode === 'pattern' || mode === 'check' || mode === 'auto') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
     console.log(`固定背景参考图（图3）：${backgroundReference}`);
-    const effort = mode === 'check'
+    const effort = mode === 'check' || mode === 'auto'
       ? (config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh')
       : (config.pattern_reasoning_effort || 'xhigh');
     console.log(`推理参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${effort}`);
@@ -755,6 +917,10 @@ async function main() {
   if (mode === 'lvcheck') {
     console.log(`检测参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${config.lv_detection_reasoning_effort || 'xhigh'}`);
     console.log('仅移动 decision=detected 的图片；not_detected 和 uncertain 保留原位。');
+  }
+  if (mode === 'auto') {
+    console.log('自动顺序：纹样替换与背景融合 → 检测修复 → LV信息纯检测分类。');
+    console.log(`LV检测参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${config.lv_detection_reasoning_effort || 'xhigh'}`);
   }
   console.log(`输出目录：${dateOutputRoot}`);
   console.log(`图片任务：${tasks.length}，任务并发：${concurrency}`);
@@ -775,12 +941,22 @@ async function main() {
       config,
       dryRun: Boolean(args['dry-run']),
     }),
-    args['dry-run'] ? null : task => copyFailedOriginal(dateOutputRoot, task),
+    args['dry-run']
+      ? null
+      : mode === 'auto'
+        ? (task, error) => copyAutoFailedOriginal(dateOutputRoot, task, error)
+        : task => copyFailedOriginal(dateOutputRoot, task),
   );
 
   const succeeded = results.filter(result => result.status === 'success' || result.status === 'dry-run').length;
   const failed = results.filter(result => result.status === 'failed');
   console.log(`\n批次结束：成功 ${succeeded}，失败 ${failed.length}`);
+  if (mode === 'auto') {
+    const passed = results.filter(result => result.status === 'success' && result.decision === 'not_detected').length;
+    const detected = results.filter(result => result.status === 'success' && result.decision === 'detected').length;
+    const uncertain = results.filter(result => result.status === 'success' && result.decision === 'uncertain').length;
+    console.log(`最终分类：passed ${passed}，lv_detected ${detected}，uncertain ${uncertain}`);
+  }
   console.log(`产物目录：${dateOutputRoot}`);
   if (failed.length) process.exitCode = 1;
 }
