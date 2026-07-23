@@ -377,6 +377,12 @@ async function findOriginalForCheck(resultImagePath, taskName) {
   const candidate = path.join(dateDir, 'intermediate', `${taskName}_white.png`);
   if (await fileExists(candidate)) return candidate;
 
+  // 兼容已有批次：白底前图已放入 intermediate，但文件名未追加 _white。
+  for (const extension of IMAGE_EXTENSIONS) {
+    const intermediateCandidate = path.join(dateDir, 'intermediate', `${taskName}${extension}`);
+    if (await fileExists(intermediateCandidate)) return intermediateCandidate;
+  }
+
   // 兼容已有批次：原图与 final 文件夹同级，且保留原始文件名。
   for (const extension of IMAGE_EXTENSIONS) {
     const rootCandidate = path.join(dateDir, `${taskName}${extension}`);
