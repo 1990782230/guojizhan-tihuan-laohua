@@ -10,7 +10,7 @@ $script:selectedMode = $null
 $form = New-Object System.Windows.Forms.Form
 $form.Text = '包袋电商图片批处理'
 $form.StartPosition = 'CenterScreen'
-$form.ClientSize = New-Object System.Drawing.Size(430, 245)
+$form.ClientSize = New-Object System.Drawing.Size(430, 295)
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
 $form.MinimizeBox = $false
@@ -45,6 +45,7 @@ function Add-ModeButton {
 Add-ModeButton -Text '1. 批量生成白底图' -Mode 'white' -Top 58
 Add-ModeButton -Text '2. 批量替换印花图案' -Mode 'pattern' -Top 108
 Add-ModeButton -Text '3. 批量生成主图和 5 张详情图' -Mode 'gallery' -Top 158
+Add-ModeButton -Text '4. 批量复检并修复印花遗漏' -Mode 'check' -Top 208
 
 $form.Add_Shown({
     $form.Activate()
@@ -61,6 +62,7 @@ $descriptions = @{
     white = '选择包含原始产品图片的文件夹'
     pattern = '选择包含待替换印花图片的文件夹'
     gallery = '选择包含印花成品图片的文件夹'
+    check = '选择包含印花替换成品图片的文件夹，或日期目录'
 }
 
 $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog

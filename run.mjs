@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { editImage } from './lib/image-api.mjs';
-import { reasonedEditImage } from './lib/reasoned-image-api.mjs';
+import { reasonedAnalyzeImages, reasonedEditImage } from './lib/reasoned-image-api.mjs';
 
 const PROJECT_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
@@ -12,6 +12,7 @@ const MODES = {
   white: '白底图',
   pattern: '印花替换',
   gallery: '电商主图与详情图',
+  check: '印花复检修复',
 };
 
 function parseArgs(argv) {
@@ -39,9 +40,10 @@ const HELP = `包袋电商图片批处理程序
   node run.mjs --mode white --input "D:\\产品图"
   node run.mjs --mode pattern --input "D:\\产品图"
   node run.mjs --mode gallery --input "D:\\产品图"
+  node run.mjs --mode check --input "D:\\产品图"
 
 可选参数：
-  --mode <mode>          white | pattern | gallery
+  --mode <mode>          white | pattern | gallery | check
   --input <folder>       直接指定输入文件夹
   --output <folder>      自定义输出根目录
   --dry-run              仅检查任务和目录，不调用生图接口
@@ -71,7 +73,7 @@ function pickMode() {
     '$form = New-Object System.Windows.Forms.Form',
     '$form.Text = "选择处理模式"',
     '$form.StartPosition = "CenterScreen"',
-    '$form.Size = New-Object System.Drawing.Size(430,250)',
+    '$form.Size = New-Object System.Drawing.Size(430,300)',
     '$form.FormBorderStyle = "FixedDialog"',
     '$form.MaximizeBox = $false',
     '$form.MinimizeBox = $false',
@@ -99,6 +101,12 @@ function pickMode() {
     '$b3.Location = New-Object System.Drawing.Point(28,151)',
     '$b3.Add_Click({ $script:choice = "gallery"; $form.Close() })',
     '$form.Controls.Add($b3)',
+    '$b4 = New-Object System.Windows.Forms.Button',
+    '$b4.Text = "4. 印花复检并修复遗漏"',
+    '$b4.Size = New-Object System.Drawing.Size(350,38)',
+    '$b4.Location = New-Object System.Drawing.Point(28,199)',
+    '$b4.Add_Click({ $script:choice = "check"; $form.Close() })',
+    '$form.Controls.Add($b4)',
     '$form.Add_Shown({ $form.Activate(); $form.BringToFront() })',
     '$null = $form.ShowDialog()',
     'Write-Output $script:choice',
@@ -115,6 +123,8 @@ function normalizeMode(value) {
     pattern: 'pattern',
     '3': 'gallery',
     gallery: 'gallery',
+    '4': 'check',
+    check: 'check',
   };
   return aliases[normalized] || '';
 }
@@ -124,6 +134,7 @@ function pickFolder(mode) {
     white: '选择原始产品图片文件夹',
     pattern: '选择待替换印花的图片文件夹，或选择上一阶段的日期目录',
     gallery: '选择已完成印花替换的图片文件夹，或选择上一阶段的日期目录',
+    check: '选择已完成印花替换的图片文件夹，或选择上一阶段的日期目录',
   };
   const description = descriptions[mode].replaceAll("'", "''");
   const script = [
@@ -185,6 +196,7 @@ async function readPrompts(mode) {
   const namesByMode = {
     white: ['01_white'],
     pattern: ['02_pattern'],
+    check: ['05_check'],
     gallery: [
       '03_main',
       '04_detail_01',
@@ -228,7 +240,7 @@ async function findCanonicalInputs(inputDir, mode) {
         const isPatternInput = mode === 'pattern'
           && parentName === 'intermediate'
           && (fileName === '01_white.png' || fileName.endsWith('_white.png'));
-        const isGalleryInput = mode === 'gallery'
+        const isGalleryInput = (mode === 'gallery' || mode === 'check')
           && parentName === 'final'
           && (fileName === '02_pattern.png' || fileName.endsWith('_pattern.png'));
         if (isPatternInput || isGalleryInput) found.push(fullPath);
@@ -255,6 +267,9 @@ function baseTaskName(imagePath) {
   }
   if (parentName === 'final' && fileName.endsWith('_pattern.png')) {
     return originalName.slice(0, -'_pattern'.length);
+  }
+  if (parentName === 'checked' && fileName.endsWith('_checked.png')) {
+    return originalName.slice(0, -'_checked'.length);
   }
   if (
     (fileName === '01_white.png' && parentName === 'intermediate')
@@ -326,6 +341,34 @@ function reasoningOptions(config, reasoningEffort) {
   };
 }
 
+function parseCheckResult(text) {
+  const cleaned = String(text || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  let result;
+  try {
+    result = JSON.parse(cleaned);
+  } catch {
+    throw new Error(`复检结果不是有效JSON：${cleaned.slice(0, 300)}`);
+  }
+  const needsRepair = result.needs_repair === true || String(result.needs_repair).toLowerCase() === 'true';
+  return {
+    needsRepair,
+    findings: Array.isArray(result.findings) ? result.findings.map(String) : [],
+    repairPrompt: String(result.repair_prompt || '').trim(),
+  };
+}
+
+async function findOriginalForCheck(resultImagePath, taskName) {
+  const finalDir = path.dirname(resultImagePath);
+  if (path.basename(finalDir).toLowerCase() !== 'final') return null;
+  const dateDir = path.dirname(finalDir);
+  const candidate = path.join(dateDir, 'intermediate', `${taskName}_white.png`);
+  return await fileExists(candidate) ? candidate : null;
+}
+
 async function processTask({
   mode,
   task,
@@ -344,16 +387,20 @@ async function processTask({
     : path.join(taskRoot, 'intermediate');
   const finalDir = mode === 'pattern'
     ? path.join(dateOutputRoot, 'final')
-    : path.join(taskRoot, 'final');
+    : mode === 'gallery'
+      ? path.join(taskRoot, 'final')
+      : null;
   const outputDir = mode === 'white' ? intermediateDir : finalDir;
-  await fs.mkdir(outputDir, { recursive: true });
+  if (outputDir) await fs.mkdir(outputDir, { recursive: true });
 
   if (dryRun) {
     const plannedOutput = mode === 'white'
       ? path.join(intermediateDir, `${task.taskName}_white.png`)
       : mode === 'pattern'
-        ? path.join(finalDir, `${task.taskName}_pattern.png`)
-        : taskRoot;
+      ? path.join(finalDir, `${task.taskName}_pattern.png`)
+      : mode === 'check'
+        ? path.join(dateOutputRoot, 'checked', `${task.taskName}_checked.png`)
+      : taskRoot;
     console.log(`${prefix} ${MODES[mode]}计划完成：${plannedOutput}`);
     return { task: task.taskName, status: 'dry-run', taskRoot: plannedOutput };
   }
@@ -380,6 +427,51 @@ async function processTask({
       images: [task.imagePath, elementReference],
       outputPath,
     }));
+  }
+
+  if (mode === 'check') {
+    const checkedDir = path.join(dateOutputRoot, 'checked');
+    const reportDir = path.join(checkedDir, 'reports');
+    const outputPath = path.join(checkedDir, `${task.taskName}_checked.png`);
+    const reportPath = path.join(reportDir, `${task.taskName}_check.json`);
+    await fs.mkdir(reportDir, { recursive: true });
+    const originalPath = await findOriginalForCheck(task.imagePath, task.taskName);
+    const analysisImages = originalPath
+      ? [originalPath, task.imagePath, elementReference]
+      : [task.imagePath, elementReference];
+    console.log(`${prefix} 复检印花遗漏${originalPath ? '（含替换前原图对比）' : ''}`);
+    const analysis = await withRetry(`${task.taskName}/印花复检`, retries, () => reasonedAnalyzeImages({
+      prompt: prompts['05_check'],
+      images: analysisImages,
+      reasoningModel: config.reasoning_model || 'gpt-5.6-terra',
+      reasoningEffort: config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh',
+      timeoutMs: Number(config.request_timeout_ms) || 900000,
+    }));
+    const check = parseCheckResult(analysis.text);
+    const report = {
+      input_image: task.imagePath,
+      original_image: originalPath,
+      checked_at: new Date().toISOString(),
+      model: analysis.responseModel,
+      needs_repair: check.needsRepair,
+      findings: check.findings,
+      repair_prompt: check.repairPrompt,
+    };
+    await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+
+    if (!check.needsRepair) {
+      await fs.copyFile(task.imagePath, outputPath);
+      console.log(`${prefix} 未发现明确遗漏，直接保留原结果`);
+    } else {
+      if (!check.repairPrompt) throw new Error('复检发现遗漏，但没有返回修复 Prompt');
+      console.log(`${prefix} 发现 ${check.findings.length} 处遗漏，定向修复中`);
+      await withRetry(`${task.taskName}/印花修复`, retries, () => reasonedEditImage({
+        ...reasoningOptions(config, config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh'),
+        prompt: check.repairPrompt,
+        images: [task.imagePath, elementReference],
+        outputPath,
+      }));
+    }
   }
 
   if (mode === 'gallery') {
@@ -416,6 +508,8 @@ async function processTask({
     ? path.join(intermediateDir, `${task.taskName}_white.png`)
     : mode === 'pattern'
       ? path.join(finalDir, `${task.taskName}_pattern.png`)
+      : mode === 'check'
+        ? path.join(dateOutputRoot, 'checked', `${task.taskName}_checked.png`)
       : taskRoot;
   console.log(`${prefix} 完成：${completedOutput}`);
   return { task: task.taskName, status: 'success', taskRoot: completedOutput };
@@ -487,7 +581,7 @@ async function main() {
   if (!images.length) {
     const fallback = mode === 'pattern'
       ? '第一层图片或上一阶段 intermediate 文件夹中的白底图'
-      : mode === 'gallery'
+      : (mode === 'gallery' || mode === 'check')
         ? '第一层图片或上一阶段 final 文件夹中的印花图'
         : '第一层PNG/JPG/JPEG/WEBP图片';
     throw new Error(`所选文件夹中没有找到${fallback}：${inputDir}`);
@@ -496,18 +590,21 @@ async function main() {
   const tasks = assignTaskNames(images);
   const prompts = await readPrompts(mode);
   const concurrency = Math.max(1, Number(config.task_concurrency) || 5);
-  const elementReference = mode === 'pattern'
+  const elementReference = (mode === 'pattern' || mode === 'check')
     ? await resolveFixedElementReference(config)
     : null;
 
   console.log(`处理模式：${MODES[mode]}`);
   console.log(`输入目录：${inputDir}`);
-  if (mode === 'pattern') {
+  if (mode === 'pattern' || mode === 'check') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
-    console.log(`推理参数：${config.reasoning_model || 'gpt-5.5'} / ${config.pattern_reasoning_effort || 'xhigh'}`);
+    const effort = mode === 'check'
+      ? (config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh')
+      : (config.pattern_reasoning_effort || 'xhigh');
+    console.log(`推理参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${effort}`);
   }
   if (mode === 'gallery') {
-    console.log(`推理参数：${config.reasoning_model || 'gpt-5.5'} / ${config.gallery_reasoning_effort || 'xhigh'}`);
+    console.log(`推理参数：${config.reasoning_model || 'gpt-5.6-terra'} / ${config.gallery_reasoning_effort || 'xhigh'}`);
   }
   console.log(`输出目录：${dateOutputRoot}`);
   console.log(`图片任务：${tasks.length}，任务并发：${concurrency}`);

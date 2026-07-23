@@ -22,13 +22,14 @@ prompts\04_detail_02.txt
 prompts\04_detail_03.txt
 prompts\04_detail_04.txt
 prompts\04_detail_05.txt
+prompts\05_check.txt
 ```
 
 程序不会把Prompt写死在代码中，每次启动批处理时都会重新读取这些文件，因此保存修改后直接运行即可生效。
 
 支持产品图格式：PNG、JPG、JPEG、WEBP。程序只扫描所选文件夹的第一层。
 
-## 三个独立模式
+## 四个独立模式
 
 三个模式互不串行，每次只执行用户选择的一个步骤。每张输入图片是一个独立任务，最多同时运行5个任务。
 
@@ -36,6 +37,7 @@ prompts\04_detail_05.txt
 模式1：输入产品图 → intermediate\原图名_white.png
 模式2：输入待替换图片＋固定元素参考图 → final\原图名_pattern.png
 模式3：输入印花成品图 → 03_main.png＋5张详情图并发生成
+模式4：输入印花替换成品图＋固定元素参考图 → 检测遗漏并定向修复为 checked\原图名_checked.png
 ```
 
 模式2和模式3既可以读取所选文件夹第一层的普通图片，也可以直接选择此前的日期目录：
@@ -43,6 +45,7 @@ prompts\04_detail_05.txt
 ```text
 模式2会自动查找：intermediate\原图名_white.png
 模式3会自动查找：final\原图名_pattern.png
+模式4会自动查找：final\原图名_pattern.png
 ```
 
 印花替换阶段固定按以下顺序向接口发送图片，不需要用户上传参考图：
@@ -56,8 +59,9 @@ API调用模式：
 
 ```text
 模式1：Image API / gpt-image-2 / quality=high
-模式2：Responses API / gpt-5.5 / reasoning=xhigh / image_generation edit high
-模式3：Responses API / gpt-5.5 / reasoning=xhigh / image_generation edit high
+模式2：Responses API / gpt-5.6-terra / reasoning=xhigh / image_generation edit high
+模式3：Responses API / gpt-5.6-terra / reasoning=xhigh / image_generation edit high
+模式4：先用 Responses API / gpt-5.6-terra / reasoning=xhigh 检测，再仅在发现明确遗漏时调用 image_generation edit 修复
 ```
 
 生图认证配置按顺序复用：
@@ -80,6 +84,11 @@ API调用方式参考 `D:\ai\中转站\image-gen`，默认模型为 `gpt-image-2
 ├─ final\
 │  ├─ 商品A_pattern.png
 │  └─ 商品B_pattern.png
+├─ checked\
+│  ├─ 商品A_checked.png
+│  ├─ 商品B_checked.png
+│  └─ reports\
+│     └─ 每张图片的检测结果和定向修复Prompt.json
 ├─ failed\
 │  └─ 失败任务的输入原图
 ├─ 商品A\
@@ -97,6 +106,8 @@ API调用方式参考 `D:\ai\中转站\image-gen`，默认模型为 `gpt-image-2
 
 白底图和印花替换图按批次集中保存，不再为每张图片创建独立文件夹。只有一次生成6张图片的模式3按初始图片名称建立任务文件夹。任意模式中处理失败的任务，会把该任务的输入原图复制到当前日期批次下的 `failed` 文件夹，方便后续单独重跑。
 
+模式4优先自动读取同一日期目录 `intermediate\原图名_white.png` 与 `final\原图名_pattern.png` 做前后对比；如果只选择了印花成品图片，也会根据成品图和元素参考图完成检测。检测没有发现明确遗漏时，程序直接复制原印花成品图到 `checked`，不会额外调用生图接口。检测和修复规则可在 `prompts\05_check.txt` 中编辑。
+
 日期按照台北时区在批次启动时确定。
 
 ## 命令行
@@ -105,6 +116,7 @@ API调用方式参考 `D:\ai\中转站\image-gen`，默认模型为 `gpt-image-2
 node run.mjs --mode white --input "D:\产品图"
 node run.mjs --mode pattern --input "D:\产品图"
 node run.mjs --mode gallery --input "D:\产品图"
+node run.mjs --mode check --input "D:\产品图"
 ```
 
 仅检查任务和目录，不调用接口：
