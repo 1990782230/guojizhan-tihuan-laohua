@@ -12,6 +12,7 @@
   "request_timeout_ms": 900000,
   "output_folder": "output",
   "element_reference": "assets/element-reference.png",
+  "background_reference": "assets/微信图片_20260723193827_1219_10.png",
   "edit_endpoint": "/images/edits",
   "edit_image_field": "image[]"
 }

@@ -276,6 +276,13 @@ async function listModeImages(inputDir, mode) {
   return findCanonicalInputs(inputDir, mode);
 }
 
+async function resolveFixedBackgroundReference(config) {
+  const configured = config.background_reference || 'assets/微信图片_20260723193827_1219_10.png';
+  const resolved = path.resolve(PROJECT_ROOT, configured);
+  if (!await fileExists(resolved)) throw new Error(`缺少内置背景参考图：${resolved}`);
+  return resolved;
+}
+
 function baseTaskName(imagePath) {
   const fileName = path.basename(imagePath).toLowerCase();
   const parentName = path.basename(path.dirname(imagePath)).toLowerCase();
@@ -434,7 +441,7 @@ function buildCheckRepairPrompt(basePatternPrompt, findings) {
 
 这是对已经完成一次印花替换的成品图进行补修，不是重新设计或重新生成整张产品图。
 
-图1是待编辑的印花成品图，图2是元素参考图。请使用与首次印花替换相同的识别、材质融合、透视和遮挡能力，自主检查图1中的纹样对象，只补修复检模型确认仍存在的以下对象类型：
+图1是待编辑的印花成品图，图2是元素参考图，图3是固定背景参考图。请使用与首次印花替换相同的识别、材质融合、透视和遮挡能力，自主检查图1中的纹样对象，只补修复检模型确认仍存在的以下对象类型，并继续保持图3背景和产品居中构图：
 
 ${objects}
 
@@ -444,7 +451,7 @@ ${objects}
 2. 在图1中自主识别属于上述类型、且外形确实不属于图2五个目标元素的所有残留旧纹样对象，并按照前述映射逐个原位替换。
 3. 图1中已经属于图2的正确元素全部锁定保留，包括它们当前的位置、数量、大小和排列布局；即使这些正确元素处于新的布局中也不得删除或重排。
 4. 不编辑正确元素周围的皮革区域，不清除整片印花，不重绘整个包身，不改变产品其他区域。
-5. 除被确认的残留旧纹样对象和指定旧文字外，图1的包型、颜色、材质纹理、缝线、包边、五金结构、手柄、肩带、挂饰、背景、光影和构图必须保持不变。
+5. 除被确认的残留旧纹样对象和指定旧文字外，图1的包型、颜色、材质纹理、缝线、包边、五金结构、手柄、肩带、挂饰、图3背景、光影和居中构图必须保持不变。
 6. 必须由你在编辑前完成对象级视觉复核；不要机械照搬复检描述中可能不准确的位置，不要把正确的图2元素再次替换。
 7. 修复后的旧纹样对象必须完整变为图2对应元素，同时保持原对象的中心、尺寸、旋转、透视、裁切、材质和遮挡关系。
 `;
@@ -457,6 +464,7 @@ async function processTask({
   total,
   dateOutputRoot,
   elementReference,
+  backgroundReference,
   prompts,
   config,
   dryRun,
@@ -507,7 +515,7 @@ async function processTask({
     await withRetry(`${task.taskName}/印花替换`, retries, () => reasonedEditImage({
       ...reasoningOptions(config, config.pattern_reasoning_effort || 'xhigh'),
       prompt: prompts['02_pattern'],
-      images: [task.imagePath, elementReference],
+      images: [task.imagePath, elementReference, backgroundReference],
       outputPath,
     }));
   }
@@ -550,7 +558,7 @@ async function processTask({
       await withRetry(`${task.taskName}/印花修复`, retries, () => reasonedEditImage({
         ...reasoningOptions(config, config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh'),
         prompt: repairPrompt,
-        images: [task.imagePath, elementReference],
+        images: [task.imagePath, elementReference, backgroundReference],
         outputPath,
       }));
     }
@@ -727,11 +735,15 @@ async function main() {
   const elementReference = (mode === 'pattern' || mode === 'check')
     ? await resolveFixedElementReference(config)
     : null;
+  const backgroundReference = (mode === 'pattern' || mode === 'check')
+    ? await resolveFixedBackgroundReference(config)
+    : null;
 
   console.log(`处理模式：${MODES[mode]}`);
   console.log(`输入目录：${inputDir}`);
   if (mode === 'pattern' || mode === 'check') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
+    console.log(`固定背景参考图（图3）：${backgroundReference}`);
     const effort = mode === 'check'
       ? (config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh')
       : (config.pattern_reasoning_effort || 'xhigh');
@@ -758,6 +770,7 @@ async function main() {
       total: tasks.length,
       dateOutputRoot,
       elementReference,
+      backgroundReference,
       prompts,
       config,
       dryRun: Boolean(args['dry-run']),
