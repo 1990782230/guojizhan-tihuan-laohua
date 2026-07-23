@@ -37,7 +37,7 @@ prompts\05_check.txt
 模式1：输入产品图 → intermediate\原图名_white.png
 模式2：输入待替换图片＋固定元素参考图 → final\原图名_pattern.png
 模式3：输入印花成品图 → 03_main.png＋5张详情图并发生成
-模式4：输入印花替换成品图＋固定新元素参考图＋固定旧纹样大全 → 检测遗漏并定向修复为 checked\原图名_checked.png
+模式4：输入印花替换成品图＋同名替换前白底图＋固定新元素参考图 → 检测遗漏与错误新增，并定向修复为 checked\原图名_checked.png
 ```
 
 模式2和模式3既可以读取所选文件夹第一层的普通图片，也可以直接选择此前的日期目录：
@@ -53,12 +53,6 @@ prompts\05_check.txt
 ```text
 图1：当前任务的白底包袋图
 图2：D:\ai\包包处理\assets\element-reference.png
-```
-
-模式4固定附带旧纹样大全参考图：
-
-```text
-旧纹样参考图：D:\ai\包包处理\assets\old-pattern-reference.png
 ```
 
 API调用模式：
@@ -112,7 +106,7 @@ API调用方式参考 `D:\ai\中转站\image-gen`，默认模型为 `gpt-image-2
 
 白底图和印花替换图按批次集中保存，不再为每张图片创建独立文件夹。只有一次生成6张图片的模式3按初始图片名称建立任务文件夹。任意模式中处理失败的任务，会把该任务的输入原图复制到当前日期批次下的 `failed` 文件夹，方便后续单独重跑。
 
-模式4优先自动读取同一日期目录 `intermediate\原图名_white.png` 与 `final\原图名_pattern.png` 做前后对比；如果只选择了印花成品图片，也会根据成品图、新元素参考图和内置旧纹样大全完成检测。旧纹样大全包含 LV 字母组合、旧花纹和 LOUIS VUITTON/PAIRS 文字样本；文字检测规则为 LOUIS VUITTON → ARRE LUXURY、PAIRS → CHINA。检测没有发现明确遗漏时，程序直接复制原印花成品图到 `checked`，不会额外调用生图接口。检测和修复规则可在 `prompts\05_check.txt` 中编辑。
+模式4会自动读取同一日期目录 `intermediate\原图名_white.png` 与 `final\原图名_pattern.png` 做逐槽位前后对比；必须选择包含这两个目录的日期文件夹，或其 `final` 文件夹。它同时检查两类问题：旧纹样遗漏替换，以及图2中被错误新增到图1原本没有纹样的位置的新元素。文字检测规则为 LOUIS VUITTON → ARRE LUXURY、PAIRS → CHINA。检测没有发现明确问题时，程序直接复制原印花成品图到 `checked`，不会额外调用生图接口。检测和修复规则可在 `prompts\05_check.txt` 中编辑。
 
 日期按照台北时区在批次启动时确定。
 

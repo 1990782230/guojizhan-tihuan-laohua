@@ -341,13 +341,6 @@ function reasoningOptions(config, reasoningEffort) {
   };
 }
 
-async function resolveFixedOldPatternReference(config) {
-  const configured = config.old_pattern_reference || 'assets/old-pattern-reference.png';
-  const resolved = path.resolve(PROJECT_ROOT, configured);
-  if (!await fileExists(resolved)) throw new Error(`缺少内置旧纹样参考图：${resolved}`);
-  return resolved;
-}
-
 function parseCheckResult(text) {
   const cleaned = String(text || '')
     .trim()
@@ -372,6 +365,10 @@ async function findOriginalForCheck(resultImagePath, taskName) {
   const finalDir = path.dirname(resultImagePath);
   if (path.basename(finalDir).toLowerCase() !== 'final') return null;
   const dateDir = path.dirname(finalDir);
+  if (path.basename(resultImagePath).toLowerCase() === '02_pattern.png') {
+    const legacyCandidate = path.join(dateDir, 'intermediate', '01_white.png');
+    if (await fileExists(legacyCandidate)) return legacyCandidate;
+  }
   const candidate = path.join(dateDir, 'intermediate', `${taskName}_white.png`);
   return await fileExists(candidate) ? candidate : null;
 }
@@ -383,7 +380,6 @@ async function processTask({
   total,
   dateOutputRoot,
   elementReference,
-  oldPatternReference,
   prompts,
   config,
   dryRun,
@@ -444,10 +440,11 @@ async function processTask({
     const reportPath = path.join(reportDir, `${task.taskName}_check.json`);
     await fs.mkdir(reportDir, { recursive: true });
     const originalPath = await findOriginalForCheck(task.imagePath, task.taskName);
-    const analysisImages = originalPath
-      ? [originalPath, task.imagePath, elementReference, oldPatternReference]
-      : [task.imagePath, elementReference, oldPatternReference];
-    console.log(`${prefix} 复检印花遗漏${originalPath ? '（含替换前原图对比）' : ''}`);
+    if (!originalPath) {
+      throw new Error('复检需要同名白底前图。请选择包含 intermediate 和 final 的日期文件夹，或其 final 文件夹。');
+    }
+    const analysisImages = [originalPath, task.imagePath, elementReference];
+    console.log(`${prefix} 前后对比复检印花遗漏与错误新增`);
     const analysis = await withRetry(`${task.taskName}/印花复检`, retries, () => reasonedAnalyzeImages({
       prompt: prompts['05_check'],
       images: analysisImages,
@@ -476,7 +473,7 @@ async function processTask({
       await withRetry(`${task.taskName}/印花修复`, retries, () => reasonedEditImage({
         ...reasoningOptions(config, config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh'),
         prompt: check.repairPrompt,
-        images: [task.imagePath, elementReference],
+        images: [originalPath, task.imagePath, elementReference],
         outputPath,
       }));
     }
@@ -601,15 +598,11 @@ async function main() {
   const elementReference = (mode === 'pattern' || mode === 'check')
     ? await resolveFixedElementReference(config)
     : null;
-  const oldPatternReference = mode === 'check'
-    ? await resolveFixedOldPatternReference(config)
-    : null;
 
   console.log(`处理模式：${MODES[mode]}`);
   console.log(`输入目录：${inputDir}`);
   if (mode === 'pattern' || mode === 'check') {
     console.log(`固定元素参考图（图2）：${elementReference}`);
-    if (mode === 'check') console.log(`固定旧纹样参考图：${oldPatternReference}`);
     const effort = mode === 'check'
       ? (config.check_reasoning_effort || config.pattern_reasoning_effort || 'xhigh')
       : (config.pattern_reasoning_effort || 'xhigh');
@@ -632,7 +625,6 @@ async function main() {
       total: tasks.length,
       dateOutputRoot,
       elementReference,
-      oldPatternReference,
       prompts,
       config,
       dryRun: Boolean(args['dry-run']),

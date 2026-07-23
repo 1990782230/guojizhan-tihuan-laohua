@@ -11,7 +11,6 @@
   "request_timeout_ms": 900000,
   "output_folder": "output",
   "element_reference": "assets/element-reference.png",
-  "old_pattern_reference": "assets/old-pattern-reference.png",
   "edit_endpoint": "/images/edits",
   "edit_image_field": "image[]"
 }
