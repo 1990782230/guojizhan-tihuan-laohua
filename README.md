@@ -106,7 +106,7 @@ API调用方式参考 `D:\ai\中转站\image-gen`，默认模型为 `gpt-image-2
 
 白底图和印花替换图按批次集中保存，不再为每张图片创建独立文件夹。只有一次生成6张图片的模式3按初始图片名称建立任务文件夹。任意模式中处理失败的任务，会把该任务的输入原图复制到当前日期批次下的 `failed` 文件夹，方便后续单独重跑。
 
-模式4只对照印花成品图与固定元素参考图，不再读取或修改替换前图。检测模型只判断残留的对象类型，不生成坐标或矩形编辑范围。发现残留后，程序会复用模式2的完整 `02_pattern.txt` 高质量纹样替换 Prompt，并追加残留对象清单，再通过 `gpt-5.6-terra / xhigh / image_generation edit` 让修复模型重新进行对象级视觉识别和补修；已经属于元素参考图的纹样及其当前布局全部锁定保留。选择日期文件夹时程序自动读取其中 `final\原图名_pattern.png`；也可直接选择 `final` 文件夹。文字检测规则为 LOUIS VUITTON → ARRE LUXURY、PAIRS → CHINA。检测没有发现明确问题时，程序直接复制原印花成品图到 `checked`，不会额外调用生图接口。检测规则可在 `prompts\05_check.txt` 中编辑，实际修复同时复用 `prompts\02_pattern.txt`。
+模式4只对照印花成品图与固定元素参考图，不再读取或修改替换前图。检测模型只判断残留的对象类型，不生成坐标或矩形编辑范围。发现残留后，程序会复用模式2的完整 `02_pattern.txt` 高质量纹样替换 Prompt，并追加残留对象清单，再通过 `gpt-5.6-terra / xhigh / image_generation edit` 让修复模型重新进行对象级视觉识别和补修；已经属于元素参考图的纹样及其当前布局全部锁定保留。选择日期文件夹时程序自动读取其中 `final\原图名_pattern.png`；也可直接选择 `final` 文件夹。文字检测规则为 LOUIS VUITTON → ARRE LUXURY、PAIRS → CHINA、MAISON FONDÉE EN 1854 → ESTABLISHED IN 2005、ARTICLES DE VOYAGE → TRAVEL COLLECTION。检测没有发现明确问题时，程序直接复制原印花成品图到 `checked`，不会额外调用生图接口。检测规则可在 `prompts\05_check.txt` 中编辑，实际修复同时复用 `prompts\02_pattern.txt`。
 
 日期按照台北时区在批次启动时确定。
 
